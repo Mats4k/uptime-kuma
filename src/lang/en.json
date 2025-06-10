@@ -1123,5 +1123,9 @@
     "Staged Tags for Batch Add": "Staged Tags for Batch Add",
     "Clear Form": "Clear Form",
     "pause": "Pause",
-    "Manual": "Manual"
+    "Manual": "Manual",
+    "Today": "Today",
+    "Yesterday": "Yesterday",
+    "Daily View": "Daily View",
+    "Daily View Description": "Show 3-month history aggregated by day instead of recent individual checks"
 }
