@@ -1119,5 +1119,9 @@
     "Add Another Tag": "Add Another Tag",
     "Staged Tags for Batch Add": "Staged Tags for Batch Add",
     "Clear Form": "Clear Form",
-    "pause": "Pause"
+    "pause": "Pause",
+    "Today": "Today",
+    "Yesterday": "Yesterday",
+    "Daily View": "Daily View",
+    "Daily View Description": "Show 3-month history aggregated by day instead of recent individual checks"
 }
