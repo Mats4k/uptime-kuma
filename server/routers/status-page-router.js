@@ -176,7 +176,7 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                     ORDER BY timestamp ASC
                 `, [
                     monitorID,
-                    threeMonthsAgo.unix()
+                    Math.floor(threeMonthsAgo.getTime() / 1000)
                 ]);
 
                 // Convert to daily heartbeat format (minimal processing since SQL does most work)
