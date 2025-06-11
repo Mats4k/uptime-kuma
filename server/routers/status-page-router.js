@@ -145,59 +145,57 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
             
             dailyViewSettings[monitorID] = useDailyView;
 
-            if (useDailyView) {
-                // Aggregate heartbeats by day over the last 3 months
+                        if (useDailyView) {
+                // Get daily aggregated data from stat_daily table (v2.0 compatible)
+                // stat_daily gets updated in real-time, so no separation needed for today's data
                 let dailyData = await R.getAll(`
                     SELECT 
-                        DATE(time) as date,
-                        COUNT(*) as total_beats,
-                        SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) as up_beats,
-                        SUM(CASE WHEN status = 0 THEN 1 ELSE 0 END) as down_beats,
-                        SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) as pending_beats,
-                        SUM(CASE WHEN status = 3 THEN 1 ELSE 0 END) as maintenance_beats,
-                        AVG(CASE WHEN ping IS NOT NULL THEN ping END) as avg_ping,
-                        MAX(time) as latest_time
-                    FROM heartbeat
+                        DATE(FROM_UNIXTIME(timestamp)) as date,
+                        (up + down) as total_beats,
+                        up as up_beats,
+                        down as down_beats,
+                        0 as pending_beats,
+                        COALESCE(JSON_EXTRACT(extras, '$.maintenance'), 0) as maintenance_beats,
+                        ping as avg_ping,
+                        FROM_UNIXTIME(timestamp) as latest_time,
+                        -- Determine status based on majority (done in SQL for better performance)
+                        CASE 
+                            WHEN COALESCE(JSON_EXTRACT(extras, '$.maintenance'), 0) > 0 THEN 3
+                            WHEN down > (up / 2) THEN 0
+                            WHEN up > 0 THEN 1
+                            ELSE 2
+                        END as status,
+                        -- Calculate uptime (done in SQL for better performance)  
+                        CASE 
+                            WHEN (up + down) > 0 THEN ROUND(up / (up + down), 4)
+                            ELSE 0
+                        END as uptime
+                    FROM stat_daily
                     WHERE monitor_id = ? 
-                    AND time >= ?
-                    GROUP BY DATE(time)
-                    ORDER BY date ASC
+                    AND timestamp >= ?
+                    ORDER BY timestamp ASC
                 `, [
                     monitorID,
-                    threeMonthsAgo.toISOString()
+                    threeMonthsAgo.unix()
                 ]);
 
-                // Convert to daily heartbeat format
-                let processedData = dailyData.map(row => {
-                    let status;
-                    // Determine overall status for the day based on majority
-                    if (row.maintenance_beats > 0) {
-                        status = 3; // Maintenance
-                    } else if (row.down_beats > row.up_beats / 2) { 
-                        status = 0; // Down if more than 50% down
-                    } else if (row.up_beats > 0) {
-                        status = 1; // Up
-                    } else {
-                        status = 2; // Pending
+                // Convert to daily heartbeat format (minimal processing since SQL does most work)
+                let processedData = dailyData.map(row => ({
+                    status: parseInt(row.status),
+                    time: row.latest_time,
+                    ping: row.avg_ping ? Math.round(row.avg_ping) : null,
+                    msg: null,
+                    uptime: parseFloat(row.uptime),
+                    date: row.date,
+                    // Additional daily stats
+                    dailyStats: {
+                        total: parseInt(row.total_beats) || 0,
+                        up: parseInt(row.up_beats) || 0,
+                        down: parseInt(row.down_beats) || 0,
+                        pending: parseInt(row.pending_beats) || 0,
+                        maintenance: parseInt(row.maintenance_beats) || 0
                     }
-
-                    return {
-                        status: status,
-                        time: row.latest_time,
-                        ping: row.avg_ping ? Math.round(row.avg_ping) : null,
-                        msg: null,
-                        uptime: row.total_beats > 0 ? (row.up_beats / row.total_beats) : 0,
-                        date: row.date,
-                        // Additional daily stats
-                        dailyStats: {
-                            total: parseInt(row.total_beats) || 0,
-                            up: parseInt(row.up_beats) || 0,
-                            down: parseInt(row.down_beats) || 0,
-                            pending: parseInt(row.pending_beats) || 0,
-                            maintenance: parseInt(row.maintenance_beats) || 0
-                        }
-                    };
-                });
+                }));
 
                 heartbeatList[monitorID] = processedData;
                 
