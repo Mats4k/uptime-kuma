@@ -203,6 +203,8 @@ async function createTables() {
         table.text("custom_css");
         table.boolean("show_powered_by").notNullable().defaultTo(true);
         table.string("google_analytics_tag_id");
+        table.integer("auto_refresh_interval").defaultTo(300).unsigned();
+        table.integer("heartbeat_range_days").notNullable().defaultTo(0);
     });
 
     // maintenance_status_page

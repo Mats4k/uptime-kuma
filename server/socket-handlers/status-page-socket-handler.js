@@ -165,6 +165,7 @@ module.exports.statusPageSocketHandler = (socket) => {
             statusPage.custom_css = config.customCSS;
             statusPage.show_powered_by = config.showPoweredBy;
             statusPage.show_certificate_expiry = config.showCertificateExpiry;
+            statusPage.heartbeat_range_days = config.heartbeatRangeDays || 0;
             statusPage.modified_date = R.isoDateTime();
             statusPage.google_analytics_tag_id = config.googleAnalyticsId;
 
@@ -290,6 +291,7 @@ module.exports.statusPageSocketHandler = (socket) => {
             statusPage.theme = "auto";
             statusPage.icon = "";
             statusPage.autoRefreshInterval = 300;
+            statusPage.heartbeat_range_days = 0;
             await R.store(statusPage);
 
             callback({

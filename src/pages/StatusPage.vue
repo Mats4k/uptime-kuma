@@ -43,6 +43,14 @@
                 </div>
 
                 <div class="my-3">
+                    <label for="heartbeat-range-days" class="form-label">{{ $t("Heartbeat Bar Range") }}</label>
+                    <input id="heartbeat-range-days" v-model="config.heartbeatRangeDays" type="number" class="form-control" :min="0" data-testid="heartbeat-range-days-input">
+                    <div class="form-text">
+                        {{ $t("Heartbeat Bar Range Description") }}
+                    </div>
+                </div>
+
+                <div class="my-3">
                     <label for="switch-theme" class="form-label">{{ $t("Theme") }}</label>
                     <select id="switch-theme" v-model="config.theme" class="form-select" data-testid="theme-select">
                         <option value="auto">{{ $t("Auto") }}</option>
@@ -772,10 +780,11 @@ export default {
             // If editMode, it will use the data from websocket.
             if (! this.editMode) {
                 axios.get("/api/status-page/heartbeat/" + this.slug).then((res) => {
-                    const { heartbeatList, uptimeList } = res.data;
+                    const { heartbeatList, uptimeList, aggregationInfo } = res.data;
 
                     this.$root.heartbeatList = heartbeatList;
                     this.$root.uptimeList = uptimeList;
+                    this.$root.aggregationInfo = aggregationInfo || {};
 
                     const heartbeatIds = Object.keys(heartbeatList);
                     const downMonitors = heartbeatIds.reduce((downMonitorsAmount, currentId) => {

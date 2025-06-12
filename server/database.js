@@ -741,6 +741,17 @@ class Database {
     }
 
     /**
+     * @returns {string} Get the SQL for the current time minus a number of days
+     */
+    static sqlDaysBefore() {
+        if (Database.dbConfig.type === "sqlite") {
+            return "DATETIME('now', '-' || ? || ' days')";
+        } else {
+            return "DATE_SUB(NOW(), INTERVAL ? DAY)";
+        }
+    }
+
+    /**
      * Migrate the old data in the heartbeat table to the new format (stat_daily, stat_hourly, stat_minutely)
      * It should be run once while upgrading V1 to V2
      *

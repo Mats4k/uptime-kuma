@@ -409,6 +409,7 @@ class StatusPage extends BeanModel {
             showPoweredBy: !!this.show_powered_by,
             googleAnalyticsId: this.google_analytics_tag_id,
             showCertificateExpiry: !!this.show_certificate_expiry,
+            heartbeatRangeDays: this.heartbeat_range_days || 0,
         };
     }
 
@@ -432,6 +433,7 @@ class StatusPage extends BeanModel {
             showPoweredBy: !!this.show_powered_by,
             googleAnalyticsId: this.google_analytics_tag_id,
             showCertificateExpiry: !!this.show_certificate_expiry,
+            heartbeatRangeDays: this.heartbeat_range_days || 0,
         };
     }
 

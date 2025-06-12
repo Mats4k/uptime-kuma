@@ -966,22 +966,181 @@ let needSetup = false;
                     throw new Error("Invalid period.");
                 }
 
-                const sqlHourOffset = Database.sqlHourOffset();
+                let data = [];
+                let aggregationType = "";
+                let aggregationPeriod = "";
 
-                let list = await R.getAll(`
-                    SELECT *
-                    FROM heartbeat
-                    WHERE monitor_id = ?
-                      AND time > ${sqlHourOffset}
-                    ORDER BY time ASC
-                `, [
-                    monitorID,
-                    -period,
-                ]);
+                // Convert period (hours) to days for comparison
+                const periodDays = period / 24;
+
+                if (periodDays <= 1) {
+                    // For 1 day or less: use raw heartbeat data
+                    const sqlHourOffset = Database.sqlHourOffset();
+                    data = await R.getAll(`
+                        SELECT *
+                        FROM heartbeat
+                        WHERE monitor_id = ?
+                          AND time > ${sqlHourOffset}
+                        ORDER BY time ASC
+                    `, [
+                        monitorID,
+                        -period,
+                    ]);
+                    aggregationType = "heartbeat";
+                    aggregationPeriod = "individual heartbeats";
+                    
+                } else if (periodDays <= 60) {
+                    // For 2-60 days: use hybrid approach - detailed last 24h + hourly for older data
+                    const dayjs = require("dayjs");
+                    const utc = require("dayjs/plugin/utc");
+                    dayjs.extend(utc);
+                    
+                    let recentData = [];
+                    let olderData = [];
+                    
+                    // Always get detailed recent data for last 24 hours for accurate "last beat" timing
+                    const sqlHourOffset = Database.sqlHourOffset();
+                    const recentList = await R.getAll(`
+                        SELECT *
+                        FROM heartbeat
+                        WHERE monitor_id = ?
+                          AND time > ${sqlHourOffset}
+                        ORDER BY time ASC
+                    `, [
+                        monitorID,
+                        -24, // Last 24 hours
+                    ]);
+                    
+                    recentData = recentList;
+                    
+                    // If we need more than 24 hours, get hourly aggregated data for the older period
+                    if (period > 24) {
+                        const uptimeCalculator = await UptimeCalculator.getUptimeCalculator(monitorID);
+                        const olderHours = Math.min(period - 24, 1416); // -24h for recent data
+                        
+                        // Helper function to determine status from aggregated row
+                        const determineStatus = (row) => {
+                            if (row.maintenance && row.maintenance > 0) {
+                                return 3; // MAINTENANCE
+                            } else if (row.up > 0 && row.down === 0) {
+                                return 1; // UP
+                            } else if (row.down > 0 && row.up === 0) {
+                                return 0; // DOWN
+                            } else if (row.up > 0 && row.down > 0) {
+                                // Mixed status - determine by majority
+                                return row.up >= row.down ? 1 : 0;
+                            } else {
+                                return 2; // PENDING (no data)
+                            }
+                        };
+                        
+                        // Get hourly aggregated data (excluding last 24 hours)
+                        const hourlyData = uptimeCalculator.getDataArray(olderHours + 24, "hour");
+                        const dataMap = new Map();
+                        hourlyData.forEach(item => {
+                            dataMap.set(item.timestamp, item);
+                        });
+                        
+                        // Create timeline for older hours (excluding recent 24h)
+                        const endTime = dayjs().utc().subtract(24, 'hours').startOf('hour');
+                        for (let i = olderHours - 1; i >= 0; i--) {
+                            const time = endTime.subtract(i, 'hour');
+                            const timestamp = time.unix();
+                            const aggregatedItem = dataMap.get(timestamp);
+                            
+                            if (aggregatedItem) {
+                                olderData.push({
+                                    status: determineStatus(aggregatedItem),
+                                    time: time.toISOString(),
+                                    ping: aggregatedItem.avgPing ? Math.round(aggregatedItem.avgPing) : null,
+                                    msg: null,
+                                    monitorID: monitorID
+                                });
+                            } else {
+                                olderData.push({
+                                    status: 4, // UNKNOWN
+                                    time: time.toISOString(),
+                                    ping: null,
+                                    msg: "No data available",
+                                    monitorID: monitorID
+                                });
+                            }
+                        }
+                    }
+                    
+                    // Combine older aggregated data + recent detailed data
+                    data = olderData.concat(recentData);
+                    aggregationType = "hybrid";
+                    aggregationPeriod = "hourly + recent detailed";
+                    
+                } else {
+                    // For 61+ days: use daily aggregated data
+                    const uptimeCalculator = await UptimeCalculator.getUptimeCalculator(monitorID);
+                    const totalDays = Math.min(periodDays, 365);
+                    aggregationType = "day";
+                    aggregationPeriod = "1 day per bar";
+                    
+                    const dayjs = require("dayjs");
+                    const utc = require("dayjs/plugin/utc");
+                    dayjs.extend(utc);
+                    
+                    // Helper function to determine status from aggregated row
+                    const determineStatus = (row) => {
+                        if (row.maintenance && row.maintenance > 0) {
+                            return 3; // MAINTENANCE
+                        } else if (row.up > 0 && row.down === 0) {
+                            return 1; // UP
+                        } else if (row.down > 0 && row.up === 0) {
+                            return 0; // DOWN
+                        } else if (row.up > 0 && row.down > 0) {
+                            // Mixed status - determine by majority
+                            return row.up >= row.down ? 1 : 0;
+                        } else {
+                            return 2; // PENDING (no data)
+                        }
+                    };
+                    
+                    // Get daily aggregated data
+                    const dailyData = uptimeCalculator.getDataArray(totalDays, "day");
+                    const dataMap = new Map();
+                    dailyData.forEach(item => {
+                        dataMap.set(item.timestamp, item);
+                    });
+                    
+                    // Create timeline for exactly totalDays days
+                    const endTime = dayjs().utc().startOf('day');
+                    for (let i = totalDays - 1; i >= 0; i--) {
+                        const time = endTime.subtract(i, 'day');
+                        const timestamp = time.unix();
+                        const aggregatedItem = dataMap.get(timestamp);
+                        
+                        if (aggregatedItem) {
+                            data.push({
+                                status: determineStatus(aggregatedItem),
+                                time: time.toISOString(),
+                                ping: aggregatedItem.avgPing ? Math.round(aggregatedItem.avgPing) : null,
+                                msg: null,
+                                monitorID: monitorID
+                            });
+                        } else {
+                            data.push({
+                                status: 4, // UNKNOWN
+                                time: time.toISOString(),
+                                ping: null,
+                                msg: "No data available",
+                                monitorID: monitorID
+                            });
+                        }
+                    }
+                }
 
                 callback({
                     ok: true,
-                    data: list,
+                    data: data,
+                    aggregationInfo: {
+                        type: aggregationType,
+                        period: aggregationPeriod
+                    }
                 });
             } catch (e) {
                 callback({
