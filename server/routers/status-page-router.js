@@ -146,14 +146,13 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
             dailyViewSettings[monitorID] = useDailyView;
 
             if (useDailyView) {
-                // Get 3 months of daily aggregated data + today's data (if missing from stat_daily)
+                // Step 1: Get historical daily data (excluding today)
                 const todayStart = new Date();
                 todayStart.setUTCHours(0, 0, 0, 0);
                 const todayTimestamp = Math.floor(todayStart.getTime() / 1000);
                 
-                let dailyData = await R.getAll(`
+                let historicalData = await R.getAll(`
                     SELECT 
-                        'historical' as data_source,
                         DATE(FROM_UNIXTIME(timestamp)) as date,
                         (up + down) as total_beats,
                         up as up_beats,
@@ -162,7 +161,6 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                         COALESCE(JSON_EXTRACT(extras, '$.maintenance'), 0) as maintenance_beats,
                         ping as avg_ping,
                         FROM_UNIXTIME(timestamp) as latest_time,
-                        timestamp,
                         -- Determine status based on majority
                         CASE 
                             WHEN COALESCE(JSON_EXTRACT(extras, '$.maintenance'), 0) > 0 THEN 3
@@ -179,64 +177,110 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                     WHERE monitor_id = ? 
                     AND timestamp >= ?
                     AND timestamp < ?
-                    
-                    UNION ALL
-                    
-                    -- Get today's data from stat_hourly if not in stat_daily
-                    SELECT 
-                        'today' as data_source,
-                        DATE(FROM_UNIXTIME(?)) as date,
-                        SUM(up + down) as total_beats,
-                        SUM(up) as up_beats,
-                        SUM(down) as down_beats,
-                        0 as pending_beats,
-                        COALESCE(SUM(JSON_EXTRACT(extras, '$.maintenance')), 0) as maintenance_beats,
-                        CASE 
-                            WHEN SUM(up) > 0 THEN 
-                                SUM(up * ping) / SUM(up)
-                            ELSE NULL 
-                        END as avg_ping,
-                        MAX(FROM_UNIXTIME(timestamp + 3600)) as latest_time,
-                        ? as timestamp,
-                        -- Determine status based on majority
-                        CASE 
-                            WHEN COALESCE(SUM(JSON_EXTRACT(extras, '$.maintenance')), 0) > 0 THEN 3
-                            WHEN SUM(down) > (SUM(up) / 2) THEN 0
-                            WHEN SUM(up) > 0 THEN 1
-                            ELSE 2
-                        END as status,
-                        -- Calculate uptime
-                        CASE 
-                            WHEN (SUM(up) + SUM(down)) > 0 THEN ROUND(SUM(up) / (SUM(up) + SUM(down)), 4)
-                            ELSE 0
-                        END as uptime
-                    FROM stat_hourly
-                    WHERE monitor_id = ?
-                    AND timestamp >= ?
-                    AND timestamp < ?
-                    AND NOT EXISTS (
-                        SELECT 1 FROM stat_daily 
-                        WHERE monitor_id = ? 
-                        AND timestamp = ?
-                    )
-                    HAVING SUM(up + down) > 0
-                    
                     ORDER BY timestamp ASC
                 `, [
                     monitorID,
                     Math.floor(threeMonthsAgo.getTime() / 1000),
-                    todayTimestamp,
-                    todayTimestamp, // for date calculation
-                    todayTimestamp, // for timestamp field
-                    monitorID,
-                    todayTimestamp,
-                    Math.floor((todayStart.getTime() + 24 * 60 * 60 * 1000) / 1000), // tomorrow start
+                    todayTimestamp
+                ]);
+
+                // Step 2: Check if today's data exists in stat_daily
+                let todayInDaily = await R.getAll(`
+                    SELECT 
+                        DATE(FROM_UNIXTIME(timestamp)) as date,
+                        (up + down) as total_beats,
+                        up as up_beats,
+                        down as down_beats,
+                        0 as pending_beats,
+                        COALESCE(JSON_EXTRACT(extras, '$.maintenance'), 0) as maintenance_beats,
+                        ping as avg_ping,
+                        FROM_UNIXTIME(timestamp) as latest_time,
+                        CASE 
+                            WHEN COALESCE(JSON_EXTRACT(extras, '$.maintenance'), 0) > 0 THEN 3
+                            WHEN down > (up / 2) THEN 0
+                            WHEN up > 0 THEN 1
+                            ELSE 2
+                        END as status,
+                        CASE 
+                            WHEN (up + down) > 0 THEN ROUND(up / (up + down), 4)
+                            ELSE 0
+                        END as uptime
+                    FROM stat_daily
+                    WHERE monitor_id = ? 
+                    AND timestamp = ?
+                `, [
                     monitorID,
                     todayTimestamp
                 ]);
 
+                // Step 3: If today's data is not in stat_daily, get it from stat_hourly
+                let todayData = [];
+                if (todayInDaily.length === 0) {
+                    let todayHourly = await R.getAll(`
+                        SELECT 
+                            SUM(up + down) as total_beats,
+                            SUM(up) as up_beats,
+                            SUM(down) as down_beats,
+                            0 as pending_beats,
+                            COALESCE(SUM(JSON_EXTRACT(extras, '$.maintenance')), 0) as maintenance_beats,
+                            CASE 
+                                WHEN SUM(up) > 0 THEN 
+                                    ROUND(SUM(up * ping) / SUM(up))
+                                ELSE NULL 
+                            END as avg_ping,
+                            MAX(FROM_UNIXTIME(timestamp + 3600)) as latest_time
+                        FROM stat_hourly
+                        WHERE monitor_id = ?
+                        AND timestamp >= ?
+                        AND timestamp < ?
+                        HAVING SUM(up + down) > 0
+                    `, [
+                        monitorID,
+                        todayTimestamp,
+                        todayTimestamp + (24 * 60 * 60) // tomorrow start
+                    ]);
+
+                    if (todayHourly.length > 0 && todayHourly[0].total_beats > 0) {
+                        const hourlyData = todayHourly[0];
+                        
+                        // Determine today's status
+                        let todayStatus;
+                        if (hourlyData.maintenance_beats > 0) {
+                            todayStatus = 3; // Maintenance
+                        } else if (hourlyData.down_beats > (hourlyData.up_beats / 2)) {
+                            todayStatus = 0; // Down
+                        } else if (hourlyData.up_beats > 0) {
+                            todayStatus = 1; // Up
+                        } else {
+                            todayStatus = 2; // Pending
+                        }
+
+                        const todayUptime = (hourlyData.up_beats + hourlyData.down_beats) > 0 
+                            ? (hourlyData.up_beats / (hourlyData.up_beats + hourlyData.down_beats)) 
+                            : 0;
+
+                        todayData = [{
+                            date: todayStart.toISOString().split('T')[0],
+                            total_beats: hourlyData.total_beats,
+                            up_beats: hourlyData.up_beats,
+                            down_beats: hourlyData.down_beats,
+                            pending_beats: hourlyData.pending_beats,
+                            maintenance_beats: hourlyData.maintenance_beats,
+                            avg_ping: hourlyData.avg_ping,
+                            latest_time: hourlyData.latest_time,
+                            status: todayStatus,
+                            uptime: todayUptime
+                        }];
+                    }
+                } else {
+                    todayData = todayInDaily;
+                }
+
+                // Combine historical data with today's data
+                const allDailyData = [...historicalData, ...todayData];
+
                 // Convert to daily heartbeat format
-                let processedData = dailyData.map(row => ({
+                let processedData = allDailyData.map(row => ({
                     status: parseInt(row.status),
                     time: row.latest_time,
                     ping: row.avg_ping ? Math.round(row.avg_ping) : null,
