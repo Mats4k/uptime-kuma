@@ -145,11 +145,15 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
             
             dailyViewSettings[monitorID] = useDailyView;
 
-                        if (useDailyView) {
-                // Get daily aggregated data from stat_daily table (v2.0 compatible)
-                // stat_daily gets updated in real-time, so no separation needed for today's data
+            if (useDailyView) {
+                // Get 3 months of daily aggregated data + today's data (if missing from stat_daily)
+                const todayStart = new Date();
+                todayStart.setUTCHours(0, 0, 0, 0);
+                const todayTimestamp = Math.floor(todayStart.getTime() / 1000);
+                
                 let dailyData = await R.getAll(`
                     SELECT 
+                        'historical' as data_source,
                         DATE(FROM_UNIXTIME(timestamp)) as date,
                         (up + down) as total_beats,
                         up as up_beats,
@@ -158,14 +162,15 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                         COALESCE(JSON_EXTRACT(extras, '$.maintenance'), 0) as maintenance_beats,
                         ping as avg_ping,
                         FROM_UNIXTIME(timestamp) as latest_time,
-                        -- Determine status based on majority (done in SQL for better performance)
+                        timestamp,
+                        -- Determine status based on majority
                         CASE 
                             WHEN COALESCE(JSON_EXTRACT(extras, '$.maintenance'), 0) > 0 THEN 3
                             WHEN down > (up / 2) THEN 0
                             WHEN up > 0 THEN 1
                             ELSE 2
                         END as status,
-                        -- Calculate uptime (done in SQL for better performance)  
+                        -- Calculate uptime
                         CASE 
                             WHEN (up + down) > 0 THEN ROUND(up / (up + down), 4)
                             ELSE 0
@@ -173,13 +178,64 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                     FROM stat_daily
                     WHERE monitor_id = ? 
                     AND timestamp >= ?
+                    AND timestamp < ?
+                    
+                    UNION ALL
+                    
+                    -- Get today's data from stat_hourly if not in stat_daily
+                    SELECT 
+                        'today' as data_source,
+                        DATE(FROM_UNIXTIME(?)) as date,
+                        SUM(up + down) as total_beats,
+                        SUM(up) as up_beats,
+                        SUM(down) as down_beats,
+                        0 as pending_beats,
+                        COALESCE(SUM(JSON_EXTRACT(extras, '$.maintenance')), 0) as maintenance_beats,
+                        CASE 
+                            WHEN SUM(up) > 0 THEN 
+                                SUM(up * ping) / SUM(up)
+                            ELSE NULL 
+                        END as avg_ping,
+                        MAX(FROM_UNIXTIME(timestamp + 3600)) as latest_time,
+                        ? as timestamp,
+                        -- Determine status based on majority
+                        CASE 
+                            WHEN COALESCE(SUM(JSON_EXTRACT(extras, '$.maintenance')), 0) > 0 THEN 3
+                            WHEN SUM(down) > (SUM(up) / 2) THEN 0
+                            WHEN SUM(up) > 0 THEN 1
+                            ELSE 2
+                        END as status,
+                        -- Calculate uptime
+                        CASE 
+                            WHEN (SUM(up) + SUM(down)) > 0 THEN ROUND(SUM(up) / (SUM(up) + SUM(down)), 4)
+                            ELSE 0
+                        END as uptime
+                    FROM stat_hourly
+                    WHERE monitor_id = ?
+                    AND timestamp >= ?
+                    AND timestamp < ?
+                    AND NOT EXISTS (
+                        SELECT 1 FROM stat_daily 
+                        WHERE monitor_id = ? 
+                        AND timestamp = ?
+                    )
+                    HAVING SUM(up + down) > 0
+                    
                     ORDER BY timestamp ASC
                 `, [
                     monitorID,
-                    Math.floor(threeMonthsAgo.getTime() / 1000)
+                    Math.floor(threeMonthsAgo.getTime() / 1000),
+                    todayTimestamp,
+                    todayTimestamp, // for date calculation
+                    todayTimestamp, // for timestamp field
+                    monitorID,
+                    todayTimestamp,
+                    Math.floor((todayStart.getTime() + 24 * 60 * 60 * 1000) / 1000), // tomorrow start
+                    monitorID,
+                    todayTimestamp
                 ]);
 
-                // Convert to daily heartbeat format (minimal processing since SQL does most work)
+                // Convert to daily heartbeat format
                 let processedData = dailyData.map(row => ({
                     status: parseInt(row.status),
                     time: row.latest_time,
