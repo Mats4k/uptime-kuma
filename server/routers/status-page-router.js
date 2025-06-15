@@ -4,7 +4,7 @@ const { UptimeKumaServer } = require("../uptime-kuma-server");
 const StatusPage = require("../model/status_page");
 const { allowDevAllOrigin, sendHttpError } = require("../util-server");
 const { R } = require("redbean-node");
-const { badgeConstants } = require("../../src/util");
+const { badgeConstants, log } = require("../../src/util");
 const { makeBadge } = require("badge-maker");
 const { UptimeCalculator } = require("../uptime-calculator");
 
@@ -258,7 +258,7 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                         if (lastHeartbeat.length > 0) {
                             // Use the status of the most recent heartbeat (regardless of when it was)
                             todayStatus = lastHeartbeat[0].status;
-                            console.log(`Monitor ${monitorID}: Last heartbeat status = ${todayStatus}, time = ${lastHeartbeat[0].time}`);
+                            log.info(`Monitor ${monitorID}: Last heartbeat status = ${todayStatus}, time = ${lastHeartbeat[0].time}`);
                         } else if (hourlyData.down_beats > (hourlyData.up_beats / 2)) {
                             todayStatus = 0; // Down
                         } else if (hourlyData.up_beats > 0) {
