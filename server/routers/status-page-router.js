@@ -243,9 +243,27 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                     if (todayHourly.length > 0 && todayHourly[0].total_beats > 0) {
                         const hourlyData = todayHourly[0];
                         
-                        // Determine today's status
+                        // Get the most recent heartbeat for today to determine actual current status
+                        let lastHeartbeat = await R.getAll(`
+                            SELECT status FROM heartbeat
+                            WHERE monitor_id = ?
+                            AND time >= FROM_UNIXTIME(?)
+                            AND time < FROM_UNIXTIME(?)
+                            ORDER BY time DESC
+                            LIMIT 1
+                        `, [
+                            monitorID,
+                            todayTimestamp,
+                            todayTimestamp + (24 * 60 * 60) // tomorrow start
+                        ]);
+                        
+                        // Determine today's status based on the last heartbeat if available
                         let todayStatus;
-                        if (hourlyData.maintenance_beats > 0) {
+                        if (lastHeartbeat.length > 0) {
+                            // Use the status of the most recent heartbeat
+                            todayStatus = lastHeartbeat[0].status;
+                        } else if (hourlyData.maintenance_beats > 0) {
+                            // Fallback to maintenance if we have maintenance beats but no recent heartbeat
                             todayStatus = 3; // Maintenance
                         } else if (hourlyData.down_beats > (hourlyData.up_beats / 2)) {
                             todayStatus = 0; // Down
