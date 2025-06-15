@@ -196,7 +196,6 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                         ping as avg_ping,
                         FROM_UNIXTIME(timestamp) as latest_time,
                         CASE 
-                            WHEN COALESCE(JSON_EXTRACT(extras, '$.maintenance'), 0) > 0 THEN 3
                             WHEN down > (up / 2) THEN 0
                             WHEN up > 0 THEN 1
                             ELSE 2
@@ -245,7 +244,7 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                         
                         // Get the most recent heartbeat overall (not just today) to determine current status
                         let lastHeartbeat = await R.getAll(`
-                            SELECT status, time FROM heartbeat
+                            SELECT status FROM heartbeat
                             WHERE monitor_id = ?
                             ORDER BY time DESC
                             LIMIT 1
@@ -254,17 +253,14 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                         ]);
                         
                         // Determine today's status based on the most recent heartbeat if available
-                        let todayStatus;
-                        if (lastHeartbeat.length > 0) {
-                            // Use the status of the most recent heartbeat (regardless of when it was)
-                            todayStatus = lastHeartbeat[0].status;
-                            log.info(`Monitor ${monitorID}: Last heartbeat status = ${todayStatus}, time = ${lastHeartbeat[0].time}`);
-                        } else if (hourlyData.down_beats > (hourlyData.up_beats / 2)) {
+                        let todayStatus = 2
+                        if (lastHeartbeat.length > 0 && lastHeartbeat[0].status === 3) {
+                            todayStatus = 3;
+                        }
+                        if (hourlyData.down_beats > (hourlyData.up_beats / 2) && todayStatus !== 3) {
                             todayStatus = 0; // Down
-                        } else if (hourlyData.up_beats > 0) {
+                        } else if (hourlyData.up_beats > 0 && todayStatus !== 3) {
                             todayStatus = 1; // Up
-                        } else {
-                            todayStatus = 2; // Pending
                         }
 
                         const todayUptime = (hourlyData.up_beats + hourlyData.down_beats) > 0 
