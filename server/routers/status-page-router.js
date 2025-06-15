@@ -243,28 +243,22 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                     if (todayHourly.length > 0 && todayHourly[0].total_beats > 0) {
                         const hourlyData = todayHourly[0];
                         
-                        // Get the most recent heartbeat for today to determine actual current status
+                        // Get the most recent heartbeat overall (not just today) to determine current status
                         let lastHeartbeat = await R.getAll(`
-                            SELECT status FROM heartbeat
+                            SELECT status, time FROM heartbeat
                             WHERE monitor_id = ?
-                            AND time >= FROM_UNIXTIME(?)
-                            AND time < FROM_UNIXTIME(?)
                             ORDER BY time DESC
                             LIMIT 1
                         `, [
-                            monitorID,
-                            todayTimestamp,
-                            todayTimestamp + (24 * 60 * 60) // tomorrow start
+                            monitorID
                         ]);
                         
-                        // Determine today's status based on the last heartbeat if available
+                        // Determine today's status based on the most recent heartbeat if available
                         let todayStatus;
                         if (lastHeartbeat.length > 0) {
-                            // Use the status of the most recent heartbeat
+                            // Use the status of the most recent heartbeat (regardless of when it was)
                             todayStatus = lastHeartbeat[0].status;
-                        } else if (hourlyData.maintenance_beats > 0) {
-                            // Fallback to maintenance if we have maintenance beats but no recent heartbeat
-                            todayStatus = 3; // Maintenance
+                            console.log(`Monitor ${monitorID}: Last heartbeat status = ${todayStatus}, time = ${lastHeartbeat[0].time}`);
                         } else if (hourlyData.down_beats > (hourlyData.up_beats / 2)) {
                             todayStatus = 0; // Down
                         } else if (hourlyData.up_beats > 0) {
