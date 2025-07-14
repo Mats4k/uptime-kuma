@@ -185,6 +185,21 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                 ]);
 
                 // Step 2: Check if today's data exists in stat_daily
+                // Get the most recent heartbeat status for real-time indication
+                let lastHeartbeat = await R.getAll(`
+                    SELECT status FROM heartbeat
+                    WHERE monitor_id = ?
+                    ORDER BY time DESC
+                    LIMIT 1
+                `, [
+                    monitorID
+                ]);
+                
+                let currentStatus = 2; // Default to PENDING
+                if (lastHeartbeat.length > 0) {
+                    currentStatus = lastHeartbeat[0].status;
+                }
+                
                 let todayInDaily = await R.getAll(`
                     SELECT 
                         DATE(FROM_UNIXTIME(timestamp)) as date,
@@ -195,11 +210,7 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                         COALESCE(JSON_EXTRACT(extras, '$.maintenance'), 0) as maintenance_beats,
                         ping as avg_ping,
                         FROM_UNIXTIME(timestamp) as latest_time,
-                        CASE 
-                            WHEN down > (up / 2) THEN 0
-                            WHEN up > 0 THEN 1
-                            ELSE 2
-                        END as status,
+                        ? as status,
                         CASE 
                             WHEN (up + down) > 0 THEN ROUND(up / (up + down), 4)
                             ELSE 0
@@ -208,6 +219,7 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                     WHERE monitor_id = ? 
                     AND timestamp = ?
                 `, [
+                    currentStatus,
                     monitorID,
                     todayTimestamp
                 ]);
