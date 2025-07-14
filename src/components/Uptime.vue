@@ -54,15 +54,8 @@ export default {
                 return "danger";
             }
 
-            if (this.lastHeartBeat.status === UP) {
-                return "primary";
-            }
-
-            if (this.lastHeartBeat.status === PENDING) {
-                return "warning";
-            }
-
-            return "secondary";
+            // All other statuses (UP, PENDING, unknown) should show green like the overall status
+            return "primary";
         },
 
         lastHeartBeat() {

@@ -252,15 +252,11 @@ router.get("/api/status-page/heartbeat-daily/:slug", cache("5 minutes"), async (
                             monitorID
                         ]);
                         
-                        // Determine today's status based on the most recent heartbeat if available
-                        let todayStatus = 2
-                        if (lastHeartbeat.length > 0 && lastHeartbeat[0].status === 3) {
-                            todayStatus = 3;
-                        }
-                        if (hourlyData.down_beats > (hourlyData.up_beats / 2) && todayStatus !== 3) {
-                            todayStatus = 0; // Down
-                        } else if (hourlyData.up_beats > 0 && todayStatus !== 3) {
-                            todayStatus = 1; // Up
+                        // Use the actual most recent heartbeat status for real-time status indication
+                        // This ensures the status blob shows current state, not aggregated daily state
+                        let todayStatus = 2; // Default to PENDING
+                        if (lastHeartbeat.length > 0) {
+                            todayStatus = lastHeartbeat[0].status;
                         }
 
                         const todayUptime = (hourlyData.up_beats + hourlyData.down_beats) > 0 
